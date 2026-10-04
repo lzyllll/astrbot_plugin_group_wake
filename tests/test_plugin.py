@@ -1,10 +1,12 @@
 import asyncio
 import tempfile
 from pathlib import Path
+from typing import Any
 import unittest
 
 from store import SqliteGroupWakeStore
 from filter import DynamicGroupWakeFilter
+from main import GroupWakePlugin
 
 
 class DummyMessage:
@@ -12,12 +14,33 @@ class DummyMessage:
         self.qq = qq
 
 
+class DummyMessageObj:
+    def __init__(self, raw_message=None, sender=None):
+        self.raw_message = raw_message
+        self.sender = sender
+
+
+class DummyRawWithRawData:
+    def __init__(self, raw_data):
+        self.raw_data = raw_data
+
+
 class DummyEvent:
-    def __init__(self, group_id: str = "", sender_id: str = "1001", message_str: str = "", messages: list | None = None):
+    def __init__(
+        self,
+        group_id: str = "",
+        sender_id: str = "1001",
+        message_str: str = "",
+        messages: list | None = None,
+        message_obj: Any = None,
+        is_admin_val: bool = False,
+    ):
         self._group_id = group_id
         self._sender_id = sender_id
         self.message_str = message_str
         self._messages = messages or []
+        self.message_obj = message_obj or DummyMessageObj()
+        self._is_admin = is_admin_val
         self.is_wake = False
         self.is_at_or_wake_command = False
 
@@ -32,6 +55,14 @@ class DummyEvent:
 
     def get_messages(self):
         return self._messages
+
+    def is_admin(self):
+        return self._is_admin
+
+
+class DummyContext:
+    def __init__(self):
+        pass
 
 
 class TestGroupWake(unittest.IsolatedAsyncioTestCase):
@@ -98,6 +129,33 @@ class TestGroupWake(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_alone.message_str, "")
         self.assertTrue(event_alone.is_wake)
         self.assertTrue(event_alone.is_at_or_wake_command)
+
+    def test_qq_official_member_role_management(self):
+        plugin = GroupWakePlugin(DummyContext(), config={"allow_member_manage": False})
+        plugin.store = self.store
+
+        # 1. QQ 官方文档规范: author.member_role == 'admin' -> True
+        msg_obj_admin = DummyMessageObj(raw_message=DummyRawWithRawData({"author": {"member_role": "admin"}}))
+        event_admin = DummyEvent(group_id="100", message_obj=msg_obj_admin)
+        self.assertTrue(plugin._can_manage(event_admin))
+
+        # 2. QQ 官方文档规范: author.member_role == 'owner' -> True
+        msg_obj_owner = DummyMessageObj(raw_message=DummyRawWithRawData({"author": {"member_role": "owner"}}))
+        event_owner = DummyEvent(group_id="100", message_obj=msg_obj_owner)
+        self.assertTrue(plugin._can_manage(event_owner))
+
+        # 3. QQ 官方文档规范: author.member_role == 'member' -> False
+        msg_obj_member = DummyMessageObj(raw_message=DummyRawWithRawData({"author": {"member_role": "member"}}))
+        event_member = DummyEvent(group_id="100", message_obj=msg_obj_member)
+        self.assertFalse(plugin._can_manage(event_member))
+
+        # 4. AstrBot 全局管理员 -> True
+        event_bot_admin = DummyEvent(group_id="100", is_admin_val=True)
+        self.assertTrue(plugin._can_manage(event_bot_admin))
+
+        # 5. 当开启 allow_member_manage 时，普通成员也可管理 -> True
+        plugin_open = GroupWakePlugin(DummyContext(), config={"allow_member_manage": True})
+        self.assertTrue(plugin_open._can_manage(event_member))
 
 
 if __name__ == "__main__":

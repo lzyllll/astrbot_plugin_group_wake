@@ -21,6 +21,9 @@ AstrBot 分群专属动态唤醒词插件。
 5. **智能消息流转**：
    - 若用户仅发送了唤醒词本身，插件友好应答问候；
    - 若唤醒词后跟随了其它指令或对话文本，插件自动剥离唤醒词前缀，点亮后续所有普通指令与 AstrBot LLM 对话引擎。
+6. **QQ 官方规范精准鉴权**：
+   - 深度遵循 [QQ 机器人官方文档规范](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_message_create.html) 对 `author.member_role` 的定义（`admin`=管理员、`owner`=群主、`member`=普通成员）；
+   - 同时全面兼容 OneBot/aiocqhttp 的 `sender.role` 以及 AstrBot 全局 `admins_id` 配置，多平台统一精准鉴权。
 
 ---
 

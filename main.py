@@ -77,17 +77,70 @@ class GroupWakePlugin(Star):
         return default
 
     def _can_manage(self, event: AstrMessageEvent) -> bool:
-        """鉴权：检查当前发送者是否有权管理本群唤醒词。"""
+        """鉴权：检查当前发送者是否有权管理本群唤醒词。
+
+        依据 QQ 机器人官方文档 (https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_message_create.html)：
+        author.member_role:
+          - "admin": 管理员
+          - "owner": 群主
+          - "member": 普通成员
+        """
+        # 1. 配置项：若开启允许普通成员管理
         if self._cfg_bool("allow_member_manage", False):
             return True
+
+        # 2. AstrBot 全局管理员配置 (admins_id)
         if event.is_admin():
             return True
+
+        # 3. 根据 QQ 官方机器人标准文档结构解析 author.member_role
+        raw_msg = getattr(event.message_obj, "raw_message", None)
+        if raw_msg is not None:
+            # 3.1 qqofficial 适配器中的 PatchedGroupMessage.raw_data
+            raw_data = getattr(raw_msg, "raw_data", None)
+            if isinstance(raw_data, dict):
+                author = raw_data.get("author")
+                if isinstance(author, dict):
+                    member_role = str(author.get("member_role") or "").lower()
+                    if member_role in ("admin", "owner"):
+                        return True
+
+            # 3.2 raw_msg 本身为字典（Webhook 或 OneBot）
+            if isinstance(raw_msg, dict):
+                # QQ 官方结构: author.member_role
+                author = raw_msg.get("author")
+                if isinstance(author, dict):
+                    member_role = str(author.get("member_role") or "").lower()
+                    if member_role in ("admin", "owner"):
+                        return True
+                # OneBot/aiocqhttp 结构: sender.role
+                sender = raw_msg.get("sender")
+                if isinstance(sender, dict):
+                    sender_role = str(sender.get("role") or "").lower()
+                    if sender_role in ("admin", "owner"):
+                        return True
+
+            # 3.3 raw_msg.author 对象属性
+            author_obj = getattr(raw_msg, "author", None)
+            if author_obj is not None:
+                if isinstance(author_obj, dict):
+                    member_role = str(author_obj.get("member_role") or "").lower()
+                else:
+                    member_role = str(getattr(author_obj, "member_role", None) or "").lower()
+                if member_role in ("admin", "owner"):
+                    return True
+
+        # 4. 检查 AstrBot 标准化 sender 字段
         sender = getattr(event.message_obj, "sender", None)
-        if sender and getattr(sender, "role", "") in ("admin", "owner"):
-            return True
-        raw = getattr(event.message_obj, "raw_message", None)
-        if isinstance(raw, dict) and raw.get("sender", {}).get("role") in ("admin", "owner"):
-            return True
+        if sender is not None:
+            role = str(getattr(sender, "member_role", None) or getattr(sender, "role", None) or "").lower()
+            if role in ("admin", "owner"):
+                return True
+            if hasattr(sender, "__dict__"):
+                d_role = str(sender.__dict__.get("member_role") or sender.__dict__.get("role") or "").lower()
+                if d_role in ("admin", "owner"):
+                    return True
+
         return False
 
     # --------------------------------------------------------------------------
