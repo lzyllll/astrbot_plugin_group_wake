@@ -136,8 +136,8 @@ class GroupWakePlugin(Star):
         if not clean_word:
             yield event.plain_result(
                 "💡 请提供要设置的唤醒词。\n"
-                "例如：/设置本群唤醒词 小助手\n"
-                "配置后，在群里直接发送「小助手 + 内容」即可唤醒机器人！"
+                "用法示例：/设置本群唤醒词 小助手\n\n"
+                "⚠️ 唤醒词不能为空字符。若需要清空本群所有唤醒词，可发送「/清空本群唤醒词」。"
             )
             return
 
@@ -217,8 +217,9 @@ class GroupWakePlugin(Star):
         wake_words = self.store.list_wake_words(group_id)
         if not wake_words:
             yield event.plain_result(
-                "📋 本群当前暂未配置专属唤醒词。\n"
-                "💡 群管理员可发送「/设置本群唤醒词 <词>」进行添加。"
+                "📋 本群当前暂未配置专属唤醒词（唤醒词列表为空）。\n"
+                "💡 此时机器人仅在被 @ 或使用全局前缀（如 /）时响应。\n"
+                "💡 群管理员可发送「/设置本群唤醒词 <词>」为本群添加专属免 @ 唤醒词。"
             )
             return
 
@@ -246,15 +247,32 @@ class GroupWakePlugin(Star):
         else:
             yield event.plain_result("💡 本群当前暂无配置任何专属唤醒词。")
 
+    @filter.command("唤醒词 帮助")
+    async def group_wake_space_help(self, event: AstrMessageEvent):
+        """查看分群动态唤醒词帮助说明。"""
+        async for res in self._do_help(event):
+            yield res
+
+    @filter.command("唤醒词")
+    async def group_wake_short_help(self, event: AstrMessageEvent):
+        """别名：查看分群动态唤醒词帮助说明。"""
+        async for res in self._do_help(event):
+            yield res
+
     @filter.command("唤醒词帮助")
     async def group_wake_help(self, event: AstrMessageEvent):
-        """查看分群动态唤醒词帮助说明。"""
+        """别名：查看分群动态唤醒词帮助说明。"""
+        async for res in self._do_help(event):
+            yield res
+
+    async def _do_help(self, event: AstrMessageEvent):
         help_text = (
             "📖【分群动态唤醒词使用指南】\n\n"
             "• /设置本群唤醒词 <词>：为本群添加专属免 @ 唤醒词\n"
             "• /删除本群唤醒词 <词>：移除本群已配置的唤醒词\n"
             "• /查看本群唤醒词：查看当前群所有生效的唤醒词\n"
-            "• /清空本群唤醒词：清空当前群所有专属唤醒词（限管理员）\n\n"
+            "• /清空本群唤醒词：清空当前群所有专属唤醒词（限管理员）\n"
+            "• /唤醒词 帮助：查看本使用指南\n\n"
             "💡 特性亮点：\n"
             "1. 仅当前群生效：私聊与不同群之间严格隔离；\n"
             "2. 零 I/O 极速响应：基于内存读缓存，消息匹配微秒级延迟；\n"

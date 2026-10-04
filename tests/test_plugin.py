@@ -51,6 +51,8 @@ class TestGroupWake(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.store.add_wake_word("100", "小助手"))
         self.assertTrue(await self.store.add_wake_word("100", "管家"))
         self.assertFalse(await self.store.add_wake_word("100", "小助手"))  # Duplicate
+        self.assertFalse(await self.store.add_wake_word("100", ""))  # Empty
+        self.assertFalse(await self.store.add_wake_word("100", "   "))  # Whitespace
 
         # 2. Get and count
         self.assertEqual(self.store.count_wake_words("100"), 2)
