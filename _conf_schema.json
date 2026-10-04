@@ -1,0 +1,26 @@
+{
+  "allow_member_manage": {
+    "type": "bool",
+    "description": "允许普通成员管理唤醒词",
+    "hint": "开启后普通群员也可添加或删除本群唤醒词；关闭时仅群管理员和机器人管理员可管理",
+    "default": false
+  },
+  "max_wake_words_per_group": {
+    "type": "int",
+    "description": "每群最大唤醒词数量",
+    "hint": "限制每个群可配置的专属唤醒词数量上限",
+    "default": 10
+  },
+  "enable_reply_on_wake_only": {
+    "type": "bool",
+    "description": "仅发送唤醒词时友好应答",
+    "hint": "当用户在群中只输入唤醒词（未输入其他内容）时，是否自动回复问候语",
+    "default": true
+  },
+  "reply_on_wake_only_text": {
+    "type": "string",
+    "description": "仅发送唤醒词时的应答语",
+    "hint": "当用户仅输入唤醒词时返回的内容",
+    "default": "在呢！有什么可以帮您的？"
+  }
+}

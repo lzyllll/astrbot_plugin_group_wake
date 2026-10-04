@@ -1,0 +1,6 @@
+name: astrbot_plugin_group_wake
+author: lzy
+version: v1.0.0
+desc: AstrBot 分群动态唤醒词插件。支持群专属唤醒词配置、SQLite持久化、微秒级零I/O匹配与群聊私聊隔离保护。
+repo: https://github.com/lzyllll/astrbot_plugin_group_wake
+astrbot_version: ">=4.0.0"
