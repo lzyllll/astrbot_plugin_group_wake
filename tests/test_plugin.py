@@ -25,6 +25,20 @@ class DummyRawWithRawData:
         self.raw_data = raw_data
 
 
+class DummyResult:
+    def __init__(self, text: str = ""):
+        self.text = text
+        self.is_markdown = False
+
+    def message(self, text: str):
+        self.text = text
+        return self
+
+    def use_markdown(self, val: bool):
+        self.is_markdown = val
+        return self
+
+
 class DummyEvent:
     def __init__(
         self,
@@ -58,6 +72,12 @@ class DummyEvent:
 
     def is_admin(self):
         return self._is_admin
+
+    def plain_result(self, text: str):
+        return DummyResult(text)
+
+    def make_result(self):
+        return DummyResult()
 
 
 class DummyContext:
@@ -157,6 +177,73 @@ class TestGroupWake(unittest.IsolatedAsyncioTestCase):
         plugin_open = GroupWakePlugin(DummyContext(), config={"allow_member_manage": True})
         self.assertTrue(plugin_open._can_manage(event_member))
 
+    async def test_markdown_tips_and_interactive_tags(self):
+        plugin = GroupWakePlugin(DummyContext(), config={"allow_member_manage": False})
+        plugin.store = self.store
+
+        event = DummyEvent(group_id="100")
+        results = [res async for res in plugin._do_help(event)]
+        self.assertEqual(len(results), 1)
+        res = results[0]
+
+        # 1. 验证 Markdown 与 Tips 格式
+        self.assertTrue(res.is_markdown)
+        self.assertIn("> 💡 **分群动态唤醒词使用指南**", res.text)
+
+        # 2. 验证点击交互标签 <qqbot-cmd-input>
+        self.assertIn("<qqbot-cmd-input", res.text)
+        self.assertIn('show="设置本群唤醒词"', res.text)
+        self.assertIn('show="删除本群唤醒词"', res.text)
+        self.assertIn('show="查看本群唤醒词"', res.text)
+        self.assertIn('show="帮助 唤醒词"', res.text)
+
+        # 3. 验证群主开启接收全部消息的提示
+        self.assertIn("接收所有消息", res.text)
+        self.assertIn("只能接收到 @消息", res.text)
+
+    async def test_command_operations_markdown(self):
+        plugin = GroupWakePlugin(DummyContext(), config={"allow_member_manage": False})
+        plugin.store = self.store
+
+        # 管理员事件
+        admin_event = DummyEvent(
+            group_id="100",
+            message_obj=DummyMessageObj(raw_message=DummyRawWithRawData({"author": {"member_role": "admin"}})),
+        )
+
+        # 1. 添加唤醒词成功
+        results = [res async for res in plugin._do_add_wake(admin_event, "小精灵")]
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].is_markdown)
+        self.assertIn("> 🎉 **唤醒词添加成功**", results[0].text)
+        self.assertIn("小精灵", results[0].text)
+        self.assertIn("接收所有消息", results[0].text)
+
+        # 2. 查看唤醒词
+        list_res = [res async for res in plugin._do_list_wake(admin_event)]
+        self.assertEqual(len(list_res), 1)
+        self.assertTrue(list_res[0].is_markdown)
+        self.assertIn("> 💡 **本群专属唤醒词列表**", list_res[0].text)
+        self.assertIn("小精灵", list_res[0].text)
+        self.assertIn("<qqbot-cmd-input", list_res[0].text)  # 包含快捷删除标签
+
+        # 3. 删除唤醒词
+        del_res = [res async for res in plugin._do_remove_wake(admin_event, "小精灵")]
+        self.assertEqual(len(del_res), 1)
+        self.assertTrue(del_res[0].is_markdown)
+        self.assertIn("> 🎉 **唤醒词移除成功**", del_res[0].text)
+
+        # 4. 普通成员无权操作提示
+        member_event = DummyEvent(
+            group_id="100",
+            message_obj=DummyMessageObj(raw_message=DummyRawWithRawData({"author": {"member_role": "member"}})),
+        )
+        unauth_res = [res async for res in plugin._do_add_wake(member_event, "小精灵")]
+        self.assertEqual(len(unauth_res), 1)
+        self.assertTrue(unauth_res[0].is_markdown)
+        self.assertIn("> ⚠️ **权限不足**", unauth_res[0].text)
+
 
 if __name__ == "__main__":
     unittest.main()
+

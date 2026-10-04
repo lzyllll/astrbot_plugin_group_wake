@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 from typing import Any
+import urllib.parse
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star, register
 
 try:
@@ -15,6 +17,36 @@ except ImportError:
     from store import SqliteGroupWakeStore
 
 _PLUGIN_DIR = Path(__file__).resolve().parent
+
+
+def safe_quote_cmd(cmd: str, max_len: int = 100) -> str:
+    """对命令进行 URL 编码，并严格保证编码后长度不超过 max_len（QQ 官方限制 100 字符）。"""
+    cur_cmd = cmd.strip("\r\n")
+    encoded = urllib.parse.quote(cur_cmd)
+    if len(encoded) <= max_len:
+        return encoded
+    while cur_cmd and len(encoded) > max_len:
+        cur_cmd = cur_cmd[:-1]
+        encoded = urllib.parse.quote(cur_cmd)
+    return encoded
+
+
+def md_cmd_input(label: str, cmd_prefix: str, add_space: bool | None = None) -> str:
+    """生成点击后填入聊天输入框的 QQ Markdown 交互标签。"""
+    cleaned = cmd_prefix.strip()
+    if add_space is None:
+        add_space = not (cleaned.isdigit() or cleaned in ("取消", "退出", "q", "Q"))
+    prefix = (cleaned + " ") if add_space else cleaned
+    encoded = safe_quote_cmd(prefix)
+    safe_show = html.escape(label.strip()[:50], quote=True)
+    return f'<qqbot-cmd-input text="{encoded}" show="{safe_show}" reference="false" />'
+
+
+def md_cmd_example(label: str, full_cmd: str) -> str:
+    """生成点击后将完整示例填入输入框的 QQ Markdown 交互标签。"""
+    encoded = safe_quote_cmd(full_cmd.strip())
+    safe_show = html.escape(label.strip()[:50], quote=True)
+    return f'<qqbot-cmd-input text="{encoded}" show="{safe_show}" reference="false" />'
 
 
 @register(
@@ -45,6 +77,69 @@ class GroupWakePlugin(Star):
     async def on_loaded(self) -> None:
         """Bot 启动钩子：确保开机全量预热。"""
         await self.store.init()
+
+    # --------------------------------------------------------------------------
+    # 消息构建辅助方法 (Markdown Tips 风格)
+    # --------------------------------------------------------------------------
+    def _markdown_result(
+        self, event: AstrMessageEvent | None, text: str
+    ) -> MessageEventResult:
+        """生成 Markdown 格式文本消息结果，并设置 use_markdown(True)。"""
+        if (
+            event is not None
+            and type(event).__name__ != "MagicMock"
+            and hasattr(event, "make_result")
+        ):
+            res = event.make_result().message(text)
+        elif event is not None and hasattr(event, "plain_result"):
+            res = event.plain_result(text)
+        else:
+            res = MessageEventResult().message(text)
+        if hasattr(res, "use_markdown"):
+            res.use_markdown(True)
+        return res
+
+    def _markdown_tip(
+        self,
+        event: AstrMessageEvent,
+        title: str,
+        details: list[str] | None = None,
+    ) -> MessageEventResult:
+        """生成标准 Markdown Tip 提示卡片。"""
+        lines = [f"> 💡 **{title}**"]
+        if details:
+            for d in details:
+                for line in str(d).splitlines():
+                    lines.append(f"> {line}")
+        return self._markdown_result(event, "\n".join(lines))
+
+    def _markdown_success(
+        self,
+        event: AstrMessageEvent,
+        title: str,
+        details: list[str] | None = None,
+    ) -> MessageEventResult:
+        """生成标准 Markdown 成功卡片。"""
+        lines = [f"> 🎉 **{title}**"]
+        if details:
+            for d in details:
+                for line in str(d).splitlines():
+                    lines.append(f"> {line}")
+        return self._markdown_result(event, "\n".join(lines))
+
+    def _markdown_warn(
+        self,
+        event: AstrMessageEvent,
+        title: str,
+        details: list[str] | None = None,
+    ) -> MessageEventResult:
+        """生成标准 Markdown 警告/错误卡片。"""
+        lines = [f"> ⚠️ **{title}**"]
+        if details:
+            for d in details:
+                for line in str(d).splitlines():
+                    lines.append(f"> {line}")
+        return self._markdown_result(event, "\n".join(lines))
 
     # --------------------------------------------------------------------------
     # 配置辅助方法
@@ -178,43 +273,67 @@ class GroupWakePlugin(Star):
     async def _do_add_wake(self, event: AstrMessageEvent, word: str):
         group_id = str(event.get_group_id() or "")
         if not group_id:
-            yield event.plain_result("❌ 该指令仅支持在群聊中使用。")
+            yield self._markdown_warn(event, "操作失败", ["该指令仅支持在群聊中使用。"])
             return
 
         if not self._can_manage(event):
-            yield event.plain_result("❌ 权限不足：仅本群管理员或机器人管理员可配置本群唤醒词。")
+            yield self._markdown_warn(
+                event, "权限不足", ["仅本群群主、管理员或机器人管理员可配置本群唤醒词。"]
+            )
             return
 
         clean_word = word.strip()
+        cmd_add = md_cmd_input("设置本群唤醒词", "/设置本群唤醒词")
+        cmd_clear = md_cmd_example("清空本群唤醒词", "/清空本群唤醒词")
         if not clean_word:
-            yield event.plain_result(
-                "💡 请提供要设置的唤醒词。\n"
-                "用法示例：/设置本群唤醒词 小助手\n\n"
-                "⚠️ 唤醒词不能为空字符。若需要清空本群所有唤醒词，可发送「/清空本群唤醒词」。"
+            yield self._markdown_tip(
+                event,
+                "请提供要设置的唤醒词",
+                [
+                    f"点击 {cmd_add} 并输入唤醒词（例如：`/设置本群唤醒词 小助手`）",
+                    "",
+                    f"⚠️ 唤醒词不能为空字符。若需要清空本群所有唤醒词，可点击 {cmd_clear}。",
+                ],
             )
             return
 
         if len(clean_word) > 20:
-            yield event.plain_result("❌ 唤醒词长度不能超过 20 个字符。")
+            yield self._markdown_warn(event, "参数错误", ["唤醒词长度不能超过 20 个字符。"])
             return
 
         max_count = self._cfg_int("max_wake_words_per_group", 10)
         current_count = self.store.count_wake_words(group_id)
+        cmd_del = md_cmd_input("删除本群唤醒词", "/删除本群唤醒词")
         if current_count >= max_count:
-            yield event.plain_result(
-                f"❌ 本群唤醒词数量已达上限（{max_count} 个）。\n"
-                "请先使用「/删除本群唤醒词 <词>」移除不需要的唤醒词。"
+            yield self._markdown_warn(
+                event,
+                "数量超限",
+                [
+                    f"本群唤醒词数量已达上限（{max_count} 个）。",
+                    f"请先点击 {cmd_del} 移除不需要的唤醒词。",
+                ],
             )
             return
 
         added = await self.store.add_wake_word(group_id, clean_word)
         if added:
-            yield event.plain_result(
-                f"🎉 已成功为本群添加专属唤醒词：「{clean_word}」！\n"
-                f"💡 现在在群内发送「{clean_word} + 内容」即可免 @ 触发机器人。"
+            yield self._markdown_success(
+                event,
+                "唤醒词添加成功",
+                [
+                    f"已成功为本群添加专属唤醒词：「**{clean_word}**」！",
+                    f"现在在群内发送「`{clean_word}` + 内容」即可免 @ 触发机器人。",
+                    "",
+                    "⚠️ **重要权限提示**：",
+                    "必须由群主在群机器人设置中开启「接收所有消息」权限，否则只能接收到 @消息（免 @ 唤醒词将无法被机器人接收）。",
+                ],
             )
         else:
-            yield event.plain_result(f"💡 唤醒词「{clean_word}」已存在于本群列表中。")
+            yield self._markdown_tip(
+                event,
+                "无需重复添加",
+                [f"唤醒词「**{clean_word}**」已存在于本群列表中。"],
+            )
 
     @filter.command("删除本群唤醒词")
     async def remove_group_wake(self, event: AstrMessageEvent, word: str = ""):
@@ -231,23 +350,40 @@ class GroupWakePlugin(Star):
     async def _do_remove_wake(self, event: AstrMessageEvent, word: str):
         group_id = str(event.get_group_id() or "")
         if not group_id:
-            yield event.plain_result("❌ 该指令仅支持在群聊中使用。")
+            yield self._markdown_warn(event, "操作失败", ["该指令仅支持在群聊中使用。"])
             return
 
         if not self._can_manage(event):
-            yield event.plain_result("❌ 权限不足：仅本群管理员或机器人管理员可配置本群唤醒词。")
+            yield self._markdown_warn(
+                event, "权限不足", ["仅本群群主、管理员或机器人管理员可配置本群唤醒词。"]
+            )
             return
 
         clean_word = word.strip()
+        cmd_del = md_cmd_input("删除本群唤醒词", "/删除本群唤醒词")
         if not clean_word:
-            yield event.plain_result("💡 请提供要删除的唤醒词。\n例如：/删除本群唤醒词 小助手")
+            yield self._markdown_tip(
+                event,
+                "请提供要删除的唤醒词",
+                [f"点击 {cmd_del} 并输入要删除的唤醒词（例如：`/删除本群唤醒词 小助手`）"],
+            )
             return
 
+        cmd_list = md_cmd_example("查看本群唤醒词", "/查看本群唤醒词")
         removed = await self.store.remove_wake_word(group_id, clean_word)
         if removed:
-            yield event.plain_result(f"✅ 已成功移除本群唤醒词：「{clean_word}」。")
+            yield self._markdown_success(
+                event, "唤醒词移除成功", [f"已成功移除本群唤醒词：「**{clean_word}**」。"]
+            )
         else:
-            yield event.plain_result(f"💡 本群未配置唤醒词：「{clean_word}」。")
+            yield self._markdown_tip(
+                event,
+                "唤醒词未找到",
+                [
+                    f"本群未配置唤醒词：「**{clean_word}**」。",
+                    f"可点击 {cmd_list} 查看当前生效的唤醒词列表。",
+                ],
+            )
 
     @filter.command("查看本群唤醒词")
     async def list_group_wake(self, event: AstrMessageEvent):
@@ -264,45 +400,75 @@ class GroupWakePlugin(Star):
     async def _do_list_wake(self, event: AstrMessageEvent):
         group_id = str(event.get_group_id() or "")
         if not group_id:
-            yield event.plain_result("❌ 该指令仅支持在群聊中使用。")
+            yield self._markdown_warn(event, "操作失败", ["该指令仅支持在群聊中使用。"])
             return
 
+        cmd_add = md_cmd_input("设置本群唤醒词", "/设置本群唤醒词")
         wake_words = self.store.list_wake_words(group_id)
         if not wake_words:
-            yield event.plain_result(
-                "📋 本群当前暂未配置专属唤醒词（唤醒词列表为空）。\n"
-                "💡 此时机器人仅在被 @ 或使用全局前缀（如 /）时响应。\n"
-                "💡 群管理员可发送「/设置本群唤醒词 <词>」为本群添加专属免 @ 唤醒词。"
+            yield self._markdown_tip(
+                event,
+                "本群专属唤醒词列表（暂无配置）",
+                [
+                    "当前本群唤醒词列表为空，机器人仅在被 @ 或使用全局前缀（如 `/`）时响应。",
+                    f"群主/管理员可点击 {cmd_add} 为本群添加专属免 @ 唤醒词。",
+                    "",
+                    "⚠️ **权限提示**：使用免 @ 唤醒词需由群主在群机器人设置中开启「接收所有消息」权限，否则只能接收到 @消息。",
+                ],
             )
             return
 
-        lines = ["📋 本群专属唤醒词列表："]
+        details = ["当前群生效的免 @ 唤醒词："]
         for idx, w in enumerate(wake_words, 1):
-            lines.append(f"{idx}. 「{w}」")
-        lines.append("\n💡 提示：在群内发送「唤醒词 + 内容」即可免 @ 触发机器人！")
-        yield event.plain_result("\n".join(lines))
+            btn_del = md_cmd_example("删除", f"/删除本群唤醒词 {w}")
+            details.append(f"{idx}. 「**{w}**」 （{btn_del}）")
+
+        details.append("")
+        details.append("💡 发送「唤醒词 + 内容」即可免 @ 触发机器人！")
+        details.append("⚠️ **权限提示**：需群主在【群设置 ➔ 群机器人】开启「接收所有消息」，否则只能接收到 @消息。")
+
+        yield self._markdown_tip(event, "本群专属唤醒词列表", details)
 
     @filter.command("清空本群唤醒词")
     async def clear_group_wake(self, event: AstrMessageEvent):
         """清空当前群的所有专属动态唤醒词（限管理员）。"""
         group_id = str(event.get_group_id() or "")
         if not group_id:
-            yield event.plain_result("❌ 该指令仅支持在群聊中使用。")
+            yield self._markdown_warn(event, "操作失败", ["该指令仅支持在群聊中使用。"])
             return
 
         if not self._can_manage(event):
-            yield event.plain_result("❌ 权限不足：仅本群管理员或机器人管理员可清空本群唤醒词。")
+            yield self._markdown_warn(
+                event, "权限不足", ["仅本群群主、管理员或机器人管理员可清空本群唤醒词。"]
+            )
             return
 
         count = await self.store.clear_group(group_id)
         if count > 0:
-            yield event.plain_result(f"✅ 已成功清空本群所有专属唤醒词（共移除 {count} 个）。")
+            yield self._markdown_success(
+                event, "清空成功", [f"已成功清空本群所有专属唤醒词（共移除 {count} 个）。"]
+            )
         else:
-            yield event.plain_result("💡 本群当前暂无配置任何专属唤醒词。")
+            yield self._markdown_tip(event, "提示", ["本群当前暂无配置任何专属唤醒词。"])
+
+    # --------------------------------------------------------------------------
+    # 帮助指令（主触发词：帮助 唤醒词）
+    # --------------------------------------------------------------------------
+    @filter.command("帮助 唤醒词")
+    async def group_wake_main_help(self, event: AstrMessageEvent):
+        """查看分群动态唤醒词帮助说明。"""
+        async for res in self._do_help(event):
+            yield res
+
+    @filter.command("帮助唤醒词")
+    async def group_wake_join_help(self, event: AstrMessageEvent):
+        """别名：查看分群动态唤醒词帮助说明。"""
+        async for res in self._do_help(event):
+            yield res
 
     @filter.command("唤醒词 帮助")
     async def group_wake_space_help(self, event: AstrMessageEvent):
-        """查看分群动态唤醒词帮助说明。"""
+        """别名：查看分群动态唤醒词帮助说明。"""
         async for res in self._do_help(event):
             yield res
 
@@ -319,16 +485,32 @@ class GroupWakePlugin(Star):
             yield res
 
     async def _do_help(self, event: AstrMessageEvent):
-        help_text = (
-            "📖【分群动态唤醒词使用指南】\n\n"
-            "• /设置本群唤醒词 <词>：为本群添加专属免 @ 唤醒词\n"
-            "• /删除本群唤醒词 <词>：移除本群已配置的唤醒词\n"
-            "• /查看本群唤醒词：查看当前群所有生效的唤醒词\n"
-            "• /清空本群唤醒词：清空当前群所有专属唤醒词（限管理员）\n"
-            "• /唤醒词 帮助：查看本使用指南\n\n"
-            "💡 特性亮点：\n"
-            "1. 仅当前群生效：私聊与不同群之间严格隔离；\n"
-            "2. 零 I/O 极速响应：基于内存读缓存，消息匹配微秒级延迟；\n"
-            "3. SQLite 持久化：唤醒词跨重启永久保存。"
-        )
-        yield event.plain_result(help_text)
+        cmd_add = md_cmd_input("设置本群唤醒词", "/设置本群唤醒词")
+        cmd_del = md_cmd_input("删除本群唤醒词", "/删除本群唤醒词")
+        cmd_list = md_cmd_example("查看本群唤醒词", "/查看本群唤醒词")
+        cmd_clear = md_cmd_example("清空本群唤醒词", "/清空本群唤醒词")
+        cmd_help = md_cmd_example("帮助 唤醒词", "/帮助 唤醒词")
+
+        details = [
+            "点击下方指令可直接填入输入框：",
+            f"• {cmd_add} `<词>`：为本群添加专属免 @ 唤醒词",
+            f"• {cmd_del} `<词>`：移除本群已配置的唤醒词",
+            f"• {cmd_list}：查看本群所有生效的唤醒词",
+            f"• {cmd_clear}：清空本群专属唤醒词（限管理员）",
+            f"• {cmd_help}：查看本帮助指南",
+            "",
+            "⚙️ **功能特性**：",
+            "1. 群间隔离：每个群唤醒词独立维护，互不干扰；",
+            "2. 极速响应：基于内存读缓存毫秒级匹配，无磁盘 I/O 阻塞；",
+            "3. 持久存储：基于 SQLite 跨重启自动恢复；",
+            "4. 权限严密：支持 QQ 官方 author.member_role 管理员校验。",
+            "",
+            "⚠️ **【重要权限说明】**：",
+            "QQ 机器人官方群聊默认仅推送 `@机器人` 的事件。",
+            "若要使用「免 @ 唤醒词」，**必须由群主**在手机 QQ 中开启权限：",
+            "👉 【群设置】 ➔ 【群机器人】 ➔ 点击本机器人 ➔ 开启【接收所有消息】",
+            "（否则机器人只能接收到 @消息，唤醒词将无法被接收并触发）",
+        ]
+
+        yield self._markdown_tip(event, "分群动态唤醒词使用指南", details)
+
